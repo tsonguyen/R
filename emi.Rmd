@@ -1,0 +1,164 @@
+---
+title: "EMI Stress Measurements"
+output: html_document
+---
+Data: Signatures obtained through hundreds of EMI measurements from a frequency sweep from PZT patches on two train rails: (1) is a constrained rail track undergoing both induced axial loading and temperature loading (2) is a free rail heated to various temperatures at a near-zero stress state.  
+Objective: use EMI signatures obtained from PZT sensors to predict stress measurements, regardless of temperature effects.  
+Feasibility demonstrated through several predictive models as shown below.
+
+```{r, warning=FALSE}
+# [max(oneMhzAt);max(oneMhzBt);max(onefiveMhzAt);max(onefiveMhzBt);...
+# skewness(oneMhzAt);skewness(oneMhzBt);skewness(onefiveMhzAt);skewness(onefiveMhzBt);...
+# kurtosis(oneMhzAt);kurtosis(oneMhzBt);kurtosis(onefiveMhzAt);kurtosis(onefiveMhzBt);...
+# var(oneMhzAt);var(oneMhzBt);var(onefiveMhzAt);var(onefiveMhzBt)];
+
+rm(list=ls(all=TRUE))
+library(reshape)
+library(ggplot2)
+library(readr)
+library(class)
+train1=data.frame(t(read_csv('train00.csv',col_names=FALSE)))
+N=round(.75*nrow(train1))
+train=train1[1:N,]
+# test=train1[N:nrow(train1),]
+test=data.frame(t(read_csv('test00.csv',col_names=FALSE)))
+ap=as.numeric(test$X1)
+test=test[,-1]
+train.columns.var = apply(train[,-1], 2, var)
+train.zeroVarRemoved = train[,c(F, train.columns.var!=0)]
+pca.result = prcomp(train.zeroVarRemoved, scale=T)
+train.pca = pca.result$x
+test.pca = predict(pca.result, test)
+pred=NULL
+
+######
+# # PCA & Nearest Neighbor
+# numTrain=nrow(train.pca)
+# rows = sample(1:nrow(train.pca), numTrain)
+# train.col.used = 1:ncol(train.pca)
+# cl=train[rows,1]
+# prediction = knn(train.pca[rows,train.col.used], test.pca[,train.col.used], t(cl), k=2)
+# mp=as.integer(prediction)
+# summary(ap-mp)
+# plot(ap-mp)
+# pred$pcaknn=mp
+
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+########
+# Decision Tree
+my_tree=rpart(X1~., data=train)
+fancyRpartPlot(my_tree)
+my_predict=predict(my_tree,test)
+mp=as.integer(my_predict)
+plot(ap-mp)
+summary(ap-mp)
+pred$tree=mp
+
+train.pcadf=data.frame(train$X1,train.pca)
+names(train.pcadf)[1]='X1'
+
+########
+# Decision Tree with PCA
+my_tree=rpart(X1~., data=train.pcadf)
+fancyRpartPlot(my_tree)
+my_predict=predict(my_tree,data.frame(test.pca))
+mp=as.integer(my_predict)
+plot(ap-mp)
+summary(ap-mp)
+pred$pcatree=mp
+
+#########
+# Random Forest
+library(randomForest)
+my_forest=randomForest(X1~., data=train,importance=TRUE,ntree=2000)
+varImpPlot(my_forest)
+my_predict=predict(my_forest,test)
+mp=as.integer(my_predict)
+plot(ap-mp)
+summary(ap-mp)
+pred$forest=mp
+
+plot(mp)
+
+#########
+# Random Forest with PCA
+library(randomForest)
+my_forest=randomForest(X1~., data=train.pcadf,importance=TRUE,ntree=2000)
+varImpPlot(my_forest)
+my_predict=predict(my_forest,data.frame(test.pca))
+mp=as.integer(my_predict)
+plot(ap-mp)
+mean(ap-mp)
+pred$pcaforest=mp
+
+#########
+# 2 way ANOVA with PCA
+anova2=aov(X1 ~ PC7+PC3+PC5+PC1,train.pcadf)
+my_predict=predict(anova2,data.frame(test.pca))
+mp=as.integer(my_predict)
+plot(ap-mp)
+summary(ap-mp)
+pred$pcaanova=mp
+
+######
+# GLM
+set.seed(50)
+# Try GLM
+lm.fit= glm(X1~., data=train)
+# summary(lm.fit)
+pr.lm = predict(lm.fit,test)
+summary(ap-ceiling(pr.lm))
+plot(ap-ceiling(pr.lm))
+pred$glm=ceiling(pr.lm)
+names(pred$glm)=NULL
+
+# tab = table(pred = ceiling(pr.lm), true = ap)
+# classAgreement(tab)
+
+# Try GLM with PCA
+lm.fitpca= glm(X1~., data=train.pcadf)
+# summary(lm.fitpca)
+pred$lmpca = predict(lm.fitpca,data.frame(test.pca))
+names(pred$lmpca)=NULL
+summary(ap-ceiling(pred$lmpca))
+plot(ap-ceiling(pred$lmpca))
+
+
+######
+# SVM
+library(e1071)
+train.pcadf=data.frame(train$X1,train.pca)
+names(train.pcadf)[1]='X1'
+model=svm(X1~.,data=train.pcadf)
+print(model)
+summary(model)
+my_predict = predict(model, test.pca)
+mp=as.integer(my_predict)
+plot(ap-mp)
+summary(ap-mp)
+pred$svm=mp
+
+tab = table(pred = mp, true = ap)
+classAgreement(tab)
+
+pred=data.frame(pred)
+pred$all_ML_avg=rowMeans(pred)
+pred$x=ap
+pred.melted=melt(pred,id='x')
+fg=ggplot(data = pred.melted, aes(x = x, y = value, color = variable)) +geom_smooth() + 
+  geom_jitter()+facet_wrap(~variable)+xlab('Measured Stress')+ylab('Predicted Stress')
+fg
+
+pred.error=(pred-pred$x)
+pred.melted=melt(pred.error,id='x')
+pred.melted$x=pred$x
+fg1=ggplot(data = pred.melted, aes(x = x, y = value, color = variable)) +geom_smooth() + 
+  geom_jitter()+facet_wrap(~variable)+xlab('Measured Stress')+ylab('Error in Stress')
+fg1
+
+```
+
+Conclusion: With prior knowledge of signatures corresponding to specific stress measurements, ongoing, in-situ stress measurements can be obtained under various temperature loadings.  

@@ -1,0 +1,346 @@
+---
+title: "Outlier Classifier"
+output: html_document
+---
+
+Rail Outlier Classifier
+schematic of rail system:
+![schematic](air_prototype.png)  
+```{r}
+rm(list=ls(all=T))
+library(signal)
+features=function(x1,x2){
+  x1=as.array(x1)
+  x2=as.array(x2)
+  X=array(0,3)
+  v1=var(x1)
+  v2=var(x2)
+  m1=sqrt(mean(x1^2))
+  m2=sqrt(mean(x2^2))
+  X[1]=(m1-m2)^2/(drop(t(m1)%*%m2))^.5
+  X[2]=max(max(abs(x1))/max(abs(x2)),(max(abs(x2))/max(abs(x1))))
+  p1=max(x1)-min(x1)
+  p2=max(x2)-min(x1)
+  X[3]=max(p1/p2,p2/p1)
+  return(X)
+}
+
+## Baseline
+setwd('E:/Data/11152013_10t_base')
+ps=c(0,7,1,6,2,5,3,4)
+z=file('bch0', 'rb')
+f=readBin(z, numeric(), 500000000,size=4,endian='big')
+close(z)
+samp=5000000
+win=.0001
+L=samp*win
+D=matrix(f,nr=L)
+S=dim(D)
+bf=butter(3,c(150,190)/2500,type='pass')
+for (i in seq(1,S[2])){
+  D[,i]=filter(bf,D[,i])
+}
+
+
+t=seq(0,win,length=L)
+
+base=array(0,dim=c(dim(D),8))
+base[,,1]=D
+
+fn=c(seq(1:7),character())
+for (i in 1:7){
+  z=file((paste('bch',ps[i+1],sep='')),'rb')
+  f=readBin(z, numeric(), 500000000,size=4,endian='big')
+  close(z)
+  length(f)
+  samp=5000000
+  win=.0001
+  L=samp*win
+  rm(D)
+  D=matrix(f,nr=L)
+  S=dim(D)
+  bf=butter(3,c(150,190)/2500,type='pass')
+  for (j in seq(1,S[2])){
+    D[,j]=filter(bf,D[,j])
+  }
+  base[,,i+1]=D
+}
+library(ggplot2)
+base.df=data.frame(base)
+base.df$x=1:500
+ggplot(base.df)+geom_line(aes(x=x,y=X1),color='red')+ggtitle('Sample Waveform - Sensor 1')
+ggplot(base.df)+geom_line(aes(x=x,y=X2),color='blue3')+ggtitle('Sample Waveform - Sensor 2')
+ggplot(base.df)+geom_line(aes(x=x,y=X3),color='magenta')+ggtitle('Sample Waveform - Sensor 3')
+ggplot(base.df)+geom_line(aes(x=x,y=X4))+ggtitle('Sample Waveform - Sensor 4')
+
+Bf=array(0,dim=c(3*4,S[2]))
+for (i in 1:4){
+  for (j in 1:S[2]){
+    Bf[(i*3-2):(i*3),j]=features(base[,j,2*i-1],base[,j,2*i])
+  }
+}
+
+##
+Bf=as.matrix(Bf)
+cBf=cov(t(Bf))
+mBf=as.array(rowMeans(Bf))
+T=dim(Bf)
+MB=array(0,T[2])
+for (i in 1:T[2]){
+  MB[i]=drop((Bf[,i]-mBf)%*%cBf%*%(Bf[,i]-mBf))
+}
+
+## Run1
+setwd('E:/Data/11152013_10t_1_5587')
+ps=c(0,7,1,6,2,5,3,4)
+z=file('bch0', 'rb')
+f=readBin(z, numeric(), 500000000,size=4,endian='big')
+close(z)
+samp=5000000
+win=.0001
+L=samp*win
+D=matrix(f,nr=L)
+S=dim(D)
+for (i in seq(1,S[2])){
+  D[,i]=filter(bf,D[,i])
+}
+
+test=array(0,dim=c(dim(D),8))
+test[,,1]=D
+
+fn=c(seq(1:7),character())
+for (i in 1:7){
+  z=file((paste('bch',ps[i+1],sep='')),'rb')
+  f=readBin(z, numeric(), 500000000,size=4,endian='big')
+  close(z)
+  length(f)
+  samp=5000000
+  win=.0001
+  L=samp*win
+  rm(D)
+  D=matrix(f,nr=L)
+  S=dim(D)
+  for (j in seq(1,S[2])){
+    D[,j]=filter(bf,D[,j])
+  }
+  test[,,i+1]=D
+}
+
+Tf=array(0,dim=c(3*4,S[2]))
+for (i in 1:4){
+  for (j in 1:S[2]){
+    Tf[(i*3-2):(i*3),j]=features(test[,j,2*i-1],test[,j,2*i])
+  }
+}
+
+##
+Bf=as.matrix(Bf)
+cBf=cov(t(Bf))
+mBf=as.array(rowMeans(Bf))
+T=dim(Tf)
+TB=array(0,T[2])
+for (i in 1:T[2]){
+  TB[i]=drop((Tf[,i]-mBf)%*%cBf%*%(Tf[,i]-mBf))
+}
+
+library(ggplot2)
+T=dim(TB)
+md.df=data.frame('Distance'=1:T,'Standardized_Score'=TB)
+ggplot(md.df,aes(Distance,Standardized_Score))+geom_line()
+
+#######
+
+bf=data.frame(label='clean',t(Bf))
+Test=data.frame(t(Tf))
+nnn=1:round(ncol(Tf)/2)
+Tff=Tf[,nnn]
+tf=data.frame(label='defect',t(Tff[,TB[nnn]>2]))
+
+train0=rbind(bf,tf)
+train1=train0[sample(nrow(train0),nrow(train0)),]
+N=round(.75*nrow(train1))
+train=train1[1:N,]
+test=train1[N:nrow(train1),]
+ap=as.numeric(test$label)
+actual=test$label
+test=test[,-1]
+train.columns.var = apply(train[,-1], 2, var)
+train.zeroVarRemoved = train[,c(F, train.columns.var!=0)]
+pca.result = prcomp(train.zeroVarRemoved, scale=F)
+train.pca = pca.result$x
+test.pca = predict(pca.result, test)
+Test.pca = predict(pca.result, Test)
+pred=NULL
+
+library(class)
+library(caret)
+######
+# PCA & Nearest Neighbor
+numTrain=round(nrow(train.pca))
+rows = sample(1:nrow(train.pca), numTrain)
+train.col.used = 1:ncol(train.pca)
+cl=train[rows,1]
+prediction = knn(train.pca[rows,train.col.used], test.pca[,train.col.used], t(cl), k=3)
+cm.pcaknn=confusionMatrix(prediction, actual)
+mp=as.integer(prediction)
+summary(ap-mp)
+plot(ap-mp,ylab='Error in PCA-KNN Predictions')
+pred$pcaknn=mp
+
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+library(partykit)
+########
+# Decision Tree
+my_tree=rpart(label~., data=train,method='class')
+my_tree1=as.party(my_tree)
+plot(my_tree1)
+prediction=predict(my_tree,test,'class')
+mp=as.integer(prediction)
+plot(ap-mp,ylab='Error in Decision Tree Predictions')
+summary(ap-mp)
+pred$tree=mp
+cm.tree=confusionMatrix(prediction, actual)
+
+train.pcadf=data.frame(train$label,train.pca)
+names(train.pcadf)[1]='label'
+
+########
+# Decision Tree with PCA
+my_tree=rpart(label~., data=train.pcadf,method='class')
+my_tree1=as.party(my_tree)
+plot(my_tree1)
+prediction=predict(my_tree,data.frame(test.pca),'class')
+mp=as.integer(prediction)
+plot(ap-mp,ylab='Error in PCA-Decision Tree Predictions')
+summary(ap-mp)
+pred$pcatree=mp
+cm.pcatree=confusionMatrix(prediction, actual)
+
+#########
+# Random Forest
+library(randomForest)
+my_forest=randomForest(as.factor(label)~., data=train,importance=TRUE,ntree=1000)
+varImpPlot(my_forest)
+prediction=predict(my_forest,test,'class')
+mp=as.integer(prediction)
+plot(ap-mp,ylab='Error in Random Forest Predictions')
+summary(ap-mp)
+pred$forest=mp
+cm.forest=confusionMatrix(prediction, actual)
+
+#########
+# Random Forest with PCA
+library(randomForest)
+my_forest=randomForest(as.factor(label)~., data=train.pcadf,importance=TRUE,ntree=1000)
+varImpPlot(my_forest)
+prediction=predict(my_forest,data.frame(test.pca),'class')
+mp=as.integer(prediction)
+plot(ap-mp,ylab='Error in PCA-Random Forest Predictions')
+summary(ap-mp)
+pred$pcaforest=mp
+cm.pcaforest=confusionMatrix(prediction, actual)
+
+######
+# SVM
+library(e1071)
+model=svm(label~.,data=train)
+print(model)
+summary(model)
+prediction = predict(model, test)
+mp=as.integer(prediction)
+plot(ap-mp,ylab='Error in SVM Predictions')
+summary(ap-mp)
+pred$svm=mp
+cm.svm=confusionMatrix(prediction, actual)
+
+######
+# SVM with PCA
+library(e1071)
+train.pcadf=data.frame(train$label,train.pca)
+names(train.pcadf)[1]='label'
+model=svm(label~.,data=train.pcadf)
+print(model)
+summary(model)
+prediction = predict(model, test.pca)
+mp=as.integer(prediction)
+plot(ap-mp,ylab='Error in PCA-SVM Predictions')
+summary(ap-mp)
+pred$pcasvm=mp
+cm.pcasvm=confusionMatrix(prediction, actual)
+
+tab = table(pred = mp, true = ap)
+classAgreement(tab)
+
+# cm=data.frame(cm.forest$overall,cm.pcaforest$overall,cm.pcaknn$overall,
+#               cm.pcasvm$overall,cm.pcatree$overall,cm.svm$overall,cm.tree$overall)
+# names(cm)=c('forest','pcaforest','pcaknn','pcasvm','pcatree','svm','tree')
+# # colnames(cm)=names(cm.forest$overall)
+# cvValues=cm
+# summary(cvValues)
+# library(lattice)
+# splom(cvValues, metric = "Accuracy", pscales = 0)
+# dotplot(cvValues, metric = "Accuracy")
+# rocDiffs <- diff(cvValues, metric = "Accuracy")
+# summary(rocDiffs)
+# dotplot(rocDiffs, metric = "Accuracy")
+# plot(caret:::cluster.resamples(cvValues))
+
+pred$label=actual
+pred$x=1:nrow(test)
+pred$x=NULL
+pred=data.frame(pred)
+library(reshape)
+library(ggplot2)
+pred.melted=melt(pred,id='label')
+pred.melted$x=1:nrow(test)
+fg=ggplot(data = pred.melted, aes(x = x, y = label, color = variable)) + 
+  geom_jitter()+facet_wrap(~variable)+xlab('Test Point')+ylab('Predicted State')
+fg
+
+fg1=ggplot(data = pred.melted, aes(variable,fill=label)) + geom_bar(position='dodge')+ylab('Frequency')+xlab('Machine Learning Type')
+fg1
+
+conf=confusionMatrix(pred.melted$label,factor(pred.melted$value,levels = c(1,2),label=c('clean','defect')))
+confu=as.data.frame(conf$table)
+confu$Percentage=confu$Freq/sum(confu$Freq)*100
+qplot(Prediction,Reference,fill=Percentage,data=confu,geom='tile',group=1,position='identity',ylab='Actual',xlab='Predicted')
+
+Test.pca = predict(pca.result, Test)
+my_forest=randomForest(as.factor(label)~., data=train,importance=TRUE,ntree=1500)
+md.df$Predicted = predict(my_forest,Test,'class')
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('Random Forest - Outlier Comparison')+ylab('')
+
+my_forest=randomForest(as.factor(label)~., data=train.pcadf,importance=TRUE,ntree=1500)
+md.df$Predicted = predict(my_forest,data.frame(Test.pca),'class')
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('PCA Random Forest - Outlier Comparison')+ylab('')
+
+my_tree=rpart(label~., data=train,method='class')
+md.df$Predicted =predict(my_tree,Test,'class')
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('Decision Tree - Outlier Comparison')+ylab('')
+
+my_tree=rpart(label~., data=train.pcadf,method='class')
+md.df$Predicted =predict(my_tree,data.frame(Test.pca),'class')
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('PCA - Outlier Decision Tree Comparison')+ylab('')
+
+model=svm(label~.,data=train)
+md.df$Predicted =prediction = predict(model, Test)
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('SVM - Outlier Comparison')+ylab('')
+
+model=svm(label~.,data=train.pcadf)
+md.df$Predicted = predict(model, data.frame(Test.pca))
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('PCA SVM - Outlier Comparison')+ylab('')
+
+md.df$Predicted = knn(train.pca[rows,train.col.used], Test.pca[,train.col.used], t(cl), k=3)
+fg3=ggplot(md.df)+geom_bar(aes(x=Distance,fill=Predicted),position='fill',binwidth=20)+geom_line(aes(x=Distance,y=Standardized_Score/max(Standardized_Score)+1))
+fg3+theme_minimal()+ggtitle('PCA KNN - Outlier Comparison')+ylab('')
+
+```
